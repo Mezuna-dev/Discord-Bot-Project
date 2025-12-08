@@ -58,7 +58,8 @@ async def on_voice_state_update(member, before, after):
         requests.post(f"{API_URL}/voice/join", json={
             "user_id": member.id,
             "guild_id": member.guild.id,
-            "channel_id": after.channel.id
+            "channel_id": after.channel.id,
+            "discord_name": member.name
         })
 
         channel = bot.get_channel(after.channel.id)
@@ -70,7 +71,8 @@ async def on_voice_state_update(member, before, after):
         r = requests.post(f"{API_URL}/voice/leave", json={
             "user_id": member.id,
             "guild_id": member.guild.id,
-            "channel_id": before.channel.id
+            "channel_id": before.channel.id,
+            "discord_name": member.name
         })
 
         data = r.json()

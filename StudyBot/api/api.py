@@ -32,6 +32,7 @@ class VoiceEvent(BaseModel):
     user_id: int
     guild_id: int
     channel_id: int
+    discord_name: str | None = None
 
 
 class AssignmentCreate(BaseModel):
@@ -112,6 +113,7 @@ def get_stats(guild_id: int, user_id: int):
 @app.post("/voice/join")
 def voice_join_api(body: VoiceEvent):
     db = SessionLocal()
+    crud.get_or_create_user(db, body.user_id, body.guild_id, body.discord_name)
     crud.voice_join(db, body.user_id, body.guild_id, body.channel_id)
     db.close()
     return {"ok": True}
@@ -119,6 +121,7 @@ def voice_join_api(body: VoiceEvent):
 @app.post("/voice/leave")
 def voice_leave_api(body: VoiceEvent):
     db = SessionLocal()
+    crud.get_or_create_user(db, body.user_id, body.guild_id, body.discord_name)
     ev = crud.voice_leave(db, body.user_id, body.guild_id, body.channel_id)
 
     if not ev:

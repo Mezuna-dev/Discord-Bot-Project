@@ -21,6 +21,10 @@ def get_or_create_user(db: Session, user_id: int, guild_id: int, discord_name: s
     user = db.query(User).filter(User.user_id == user_id, User.guild_id == guild_id).first()
 
     if user:
+        # Update discord_name if it's currently None and we have a new name
+        if user.discord_name is None and discord_name is not None:
+            user.discord_name = discord_name
+            db.commit()
         return user
 
     user = User(user_id=user_id, guild_id=guild_id, discord_name=discord_name)
