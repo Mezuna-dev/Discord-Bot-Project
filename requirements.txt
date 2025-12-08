@@ -1,6 +1,0 @@
-discord.py
-python-dotenv
-sqlalchemy
-fastapi
-requests
-uvicorn
