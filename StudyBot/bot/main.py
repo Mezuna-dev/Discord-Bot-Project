@@ -199,3 +199,4 @@ async def leaderboard(interaction: discord.Interaction):
         msg += f"{idx}. **{entry['discord_name']}** -- {hours}h {minutes}m {seconds}s\n"
     await interaction.response.send_message(msg)
 bot.run(token)
+
