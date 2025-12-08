@@ -4,9 +4,9 @@ from discord.ext import commands
 from dotenv import load_dotenv
 import os
 from datetime import datetime
-from database.db import SessionLocal
-from database import crud
+import requests
 
+API_URL = "http://localhost:8000"
 
 
 load_dotenv()
@@ -31,46 +31,56 @@ async def ping(ctx):
 
 @bot.tree.command(name="starttask", description="Name and start a task")
 async def starttask(interaction: discord.Interaction, name: str):
-    db = SessionLocal()
-    crud.get_or_create_user(db, interaction.user.id, interaction.guild.id, interaction.user.name)
-    ev = crud.start_task(db, interaction.user.id, interaction.guild.id, name)
-    db.close()
+    requests.post(f"{API_URL}/start", json={
+        "user_id": interaction.user.id,
+        "guild_id": interaction.guild.id,
+        "name": name,
+        "discord_name": interaction.user.name
+    })
     await interaction.response.send_message(f"Started task: **{name}**")
 
 @bot.tree.command(name="stoptask", description="Stop your current running task")
 async def stoptask(interaction: discord.Interaction):
-    db = SessionLocal()
-    ev = crud.stop_task(db, interaction.user.id, interaction.guild.id)
-        
-    if not ev:
-        db.close()
-        return await interaction.response.send_message("No running task found.")
-        
-    event_name = ev.event_name
-    duration_seconds = ev.duration_seconds
-    db.close()
+    post_request = requests.post(f"{API_URL}/stop", json={
+        "user_id": interaction.user.id,
+        "guild_id": interaction.guild.id
+    })
 
-    await interaction.response.send_message(f"Stopped **{event_name}**, duration: {duration_seconds} seconds.")
+    seconds = post_request.json()["seconds"]
+    event_name = post_request.json()["event_name"]
+
+    await interaction.response.send_message(f"Stopped **{event_name}**, duration: {seconds} seconds.")
 
 @bot.event
 async def on_voice_state_update(member, before, after):
-    db = SessionLocal()
-
     # Joined voice
     if before.channel is None and after.channel is not None:
-        crud.voice_join(db, member.id, member.guild.id, after.channel.id)
+        requests.post(f"{API_URL}/voice/join", json={
+            "user_id": member.id,
+            "guild_id": member.guild.id,
+            "channel_id": after.channel.id
+        })
+
         channel = bot.get_channel(after.channel.id)
-        if channel is not None:
+        if channel:
             await channel.send(f"{member.mention} joined the voice channel.")
         
     # Left voice
     if before.channel is not None and after.channel is None:
-        ev = crud.voice_leave(db, member.id, member.guild.id, before.channel.id)
+        r = requests.post(f"{API_URL}/voice/leave", json={
+            "user_id": member.id,
+            "guild_id": member.guild.id,
+            "channel_id": before.channel.id
+        })
+
+        data = r.json()
+        duration = data["duration_seconds"]
+
         channel = bot.get_channel(before.channel.id)
         if channel:
-            await channel.send(f"{member.mention} left the voice channel, Duration {ev.duration_seconds} seconds.")
-
-    db.close()
+            await channel.send(
+                f"{member.mention} left the voice channel. Duration: {duration} seconds."
+            )
 
 @bot.tree.command(name="addassignment", description="Add a new assignment")
 @app_commands.describe(
@@ -79,119 +89,111 @@ async def on_voice_state_update(member, before, after):
     description="Assignment description (optional)"
 )
 async def addassignment(interaction: discord.Interaction, title: str, due_date: str, description: str = ""):
-    db = SessionLocal()
-
-    # Convert date string → datetime
     try:
-        date = datetime.strptime(due_date, "%Y-%m-%d")
+        datetime.strptime(due_date, "%Y-%m-%d")
     except ValueError:
-        db.close()
-        return await interaction.response.send_message("Invalid date format. Use YYYY-MM-DD.")
+        await interaction.response.send_message("Invalid date format. Use YYYY-MM-DD.")
+        return
+    
+    post_request = requests.post(f"{API_URL}/assignments/add", json={
+        "user_id": interaction.user.id,
+        "guild_id": interaction.guild.id,
+        "title": title,
+        "description": description,
+        "due_date": due_date
+    })
 
-    # Make sure user exists
-    crud.get_or_create_user(db, interaction.user.id, interaction.guild.id, interaction.user.name)
-
-    # Save assignment
-    a = crud.add_assignment(
-        db,
-        user_id=interaction.user.id,
-        guild_id=interaction.guild.id,
-        title=title,
-        description=description,
-        due_date=date
-    )
-
-    assignment_title = a.title
-    assignment_id = a.assignment_id
-    db.close()
+    data = post_request.json()
+    assignment_title = data["title"]
+    assignment_id = data["assignment_id"]
     await interaction.response.send_message(f"Assignment added: **{assignment_title}** (ID: {assignment_id})")
 
 @bot.tree.command(name="assignments", description="List all your assignments")
 async def assignments(interaction: discord.Interaction):
-    db = SessionLocal()
 
-    items = crud.list_assignments(db, interaction.user.id, interaction.guild.id)
+    get_request = requests.post(f"{API_URL}/assignments/list", json={
+        "user_id": interaction.user.id,
+        "guild_id": interaction.guild.id
+    })
 
-    db.close()
+    data = get_request.json()
 
-    if not items:
-        return await interaction.response.send_message("You have no assignments yet.")
-    
+    if "error" in data:
+        await interaction.response.send_message(data["error"])
+        return
+
+    assignments = data["assignments"]
+
     msg = "**Your Assignments:**\n\n"
-    for a in items:
-        status = "Completed!" if a.is_completed else "In Progress..."
-        msg += f"ID {a.assignment_id} -- {a.title} (due {a.due_date.date()}) {status}\n"
+    for a in assignments:
+        status = "Completed!" if a["is_completed"] else "In Progress..."
+        msg += f"ID {a['assignment_id']} -- {a['title']} (due {a['due_date']}) {status}\n"
 
     await interaction.response.send_message(msg)
 
 @bot.tree.command(name="completeassignment", description="Mark an assignment as completed")
 @app_commands.describe(assignment_id="Assignment ID")
 async def completeassignment(interaction: discord.Interaction, assignment_id: int):
-    db = SessionLocal()
+    post_request = requests.post(f"{API_URL}/assignments/complete", json={
+        "assignment_id": assignment_id
+    })
 
-    a = crud.complete_assignment(db, assignment_id)
-    if not a:
-        db.close()
-        return await interaction.response.send_message("Assignment not found.")
+    data = post_request.json()
+    if "error" in data:
+        await interaction.response.send_message(data["error"])
+        return
 
-    await interaction.response.send_message(f"Assignment **{a.assignment_id} -- {a.title}** marked as completed.")
-    db.close()
+    await interaction.response.send_message(f"Assignment **{data['assignment_id']} -- {data['title']}** marked as completed.")
 
 @bot.tree.command(name="clearassignments", description="Clear all your assignments")
 async def clearassignments(interaction: discord.Interaction):
-    db = SessionLocal()
-
-    crud.clear_assignments(db, interaction.user.id, interaction.guild.id)
+    requests.post(f"{API_URL}/assignments/clear", json={
+        "user_id": interaction.user.id,
+        "guild_id": interaction.guild.id
+    })
 
     await interaction.response.send_message("All your assignments have been cleared.")
 
-    db.close()
-
 @bot.tree.command(name="mystats", description="Get your total stats")
 async def mystats(interaction: discord.Interaction):
-    db = SessionLocal()
+    get_request = requests.get(f"{API_URL}/stats/{interaction.guild.id}/{interaction.user.id}")
+    data = get_request.json()
 
-    task_stats = crud.get_total_task_time(db, interaction.user.id, interaction.guild.id)
-    voice_stats = crud.get_total_voice_time(db, interaction.user.id, interaction.guild.id)
+    task_time = data["total_task_time"]
+    voice_time = data["total_voice_time"]
 
-    if not task_stats and not voice_stats:
-        db.close()
-        return await interaction.response.send_message("No stats found.")
-    
-    # Convert seconds to hours, minutes, seconds
-    task_hours = task_stats // 3600
-    task_minutes = (task_stats % 3600) // 60
-    task_seconds = task_stats % 60
-    
-    voice_hours = voice_stats // 3600
-    voice_minutes = (voice_stats % 3600) // 60
-    voice_seconds = voice_stats % 60
-
-    db.close()
     msg = (
         f"**Your Total Stats:**\n\n"
-        f"Total Task Time: {task_hours}h {task_minutes}m {task_seconds}s\n\n"
-        f"Total Study Channel Time: {voice_hours}h {voice_minutes}m {voice_seconds}s\n"
+        f"Total Task Time: {task_time}\n"
+        f"Total Study Channel Time: {voice_time}\n"
     )
 
     await interaction.response.send_message(msg)
 
-
 @bot.tree.command(name="leaderboard", description="Show the leaderboard for top users by total study time")
 async def leaderboard(interaction: discord.Interaction):
-    db = SessionLocal()
-    leaderboard = crud.get_guild_leaderboard(db, interaction.guild.id)
-    if not leaderboard or len(leaderboard) == 0:
-        db.close()
-        return await interaction.response.send_message("No leaderboard data found.")
+
+    post_request = requests.post(f"{API_URL}/leaderboard", json={
+        "guild_id": interaction.guild.id,
+        "limit": 10
+    })
+
+    data = post_request.json()
+
+    if data["leaderboard"] == []:
+        await interaction.response.send_message("No data for leaderboard.")
+        return
+
+
+    leaderboard = data["leaderboard"]
+
     msg = "**Leaderboard — Top Study Time:**\n\n"
     for idx, entry in enumerate(leaderboard, start=1):
-        # Convert seconds to hours, minutes, seconds
-        total_seconds = entry['total_time']
+        # Convert
+        total_seconds = entry['total_seconds']
         hours = total_seconds // 3600
         minutes = (total_seconds % 3600) // 60
         seconds = total_seconds % 60
         msg += f"{idx}. **{entry['discord_name']}** -- {hours}h {minutes}m {seconds}s\n"
-    db.close()
     await interaction.response.send_message(msg)
 bot.run(token)
